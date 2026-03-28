@@ -1,0 +1,381 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8"/>
+<title>数独游戏（专业评级版）</title>
+<style>
+*{box-sizing:border-box;font-family:system-ui, sans-serif;}
+body{background:#f4f6f8;padding:20px;max-width:800px;margin:0 auto;}
+h1{text-align:center;color:#333;margin-bottom:12px;}
+.controls{display:flex;gap:10px;flex-wrap:wrap;justify-content:center;margin-bottom:16px;}
+select,button{padding:10px 14px;border-radius:8px;border:1px solid #ccc;font-size:16px;}
+button{background:#4285f4;color:white;border:none;cursor:pointer;}
+button.danger{background:#ea4335;}
+button.success{background:#34a853;}
+button.next{background:#673ab7;color:white;}
+button.donate{background:#ff9800;color:white;}
+.info{text-align:center;margin-bottom:10px;color:#555;}
+.board{display:grid;grid-template-columns:repeat(9,1fr);width:100%;max-width:540px;margin:0 auto;border:2px solid #222;background:#fff;}
+.cell{aspect-ratio:1/1;border:1px solid #bbb;display:flex;align-items:center;justify-content:center;font-size:20px;position:relative;}
+.cell input{width:100%;height:100%;text-align:center;border:none;outline:none;font-size:20px;background:transparent;}
+.cell.fixed{background:#e8f0fe;color:#111;}
+.cell.error{background:#ffebee !important;}
+.cell.highlight{background:#fff9c4;}
+.cell:nth-child(3n){border-right:2px solid #222;}
+.cell:nth-child(9n+1){border-left:2px solid #222;}
+.cell:nth-child(n+19):nth-child(-n+27),
+.cell:nth-child(n+46):nth-child(-n+54){border-bottom:2px solid #222;}
+.btm{text-align:center;margin-top:16px;display:flex;gap:10px;justify-content:center;flex-wrap:wrap;}
+
+/* 通用弹窗 */
+.modal{position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,.5);display:flex;align-items:center;justify-content:center;z-index:99;visibility:hidden;opacity:0;transition:.3s;}
+.modal.show{visibility:visible;opacity:1;}
+.modal-box{background:#fff;padding:30px 40px;border-radius:16px;text-align:center;box-shadow:0 10px 30px rgba(0,0,0,.2);max-width:360px;width:90%;}
+.modal-box h2{margin:0 0 10px;font-size:24px;}
+.rank{font-size:32px;font-weight:bold;color:#d81b60;margin:10px 0;}
+.modal-box p{font-size:16px;color:#555;}
+.modal-box button{margin-top:16px;padding:10px 24px;}
+
+/* 打赏弹窗特殊样式 */
+#donateModal .modal-box{max-width:400px;}
+#donateModal img{max-width:100%;border-radius:8px;margin:10px 0;}
+
+/* 庆祝动画 */
+.celebration{position:fixed;top:0;left:0;width:100%;height:100%;pointer-events:none;z-index:100;}
+.confetti{position:absolute;width:8px;height:16px;opacity:.9;animation:fall 3s linear forwards;}
+@keyframes fall{to{transform:translateY(100vh) rotate(720deg);opacity:0;}}
+</style>
+</head>
+<body>
+<h1>数独游戏（专业评级版）</h1>
+<div class="info">
+  难度：<span id="levelText">入门级</span> &nbsp;&nbsp;
+  用时：<span id="timer">00:00</span>
+</div>
+
+<div class="controls">
+<select id="difficulty" onchange="newSudoku()">
+  <option value="easy">入门级（1星）</option>
+  <option value="primary">初级（2星）</option>
+  <option value="medium">中级（3星）</option>
+  <option value="hard">高级（4星）</option>
+  <option value="expert">专家级（5星）</option>
+  <option value="master">大师级（6星）</option>
+</select>
+<button class="next" onclick="nextSameLevel()">下一题</button>
+<button onclick="checkPartial()">检查当前</button>
+<button onclick="submitAnswer()">提交答案</button>
+<button onclick="showAnswer()">显示答案</button>
+<button class="danger" onclick="resetUser()">重置</button>
+<button class="donate" onclick="openDonate()">打赏支持</button>
+</div>
+
+<div id="board" class="board"></div>
+
+<div class="btm">
+  <button class="success" onclick="solveSudoku()">自动填解</button>
+</div>
+
+<!-- 结果弹窗 -->
+<div class="modal" id="modal">
+  <div class="modal-box">
+    <h2>挑战成功 🎉</h2>
+    <div class="rank" id="modalRank"></div>
+    <p id="modalText"></p>
+    <button onclick="closeModal()">确定</button>
+  </div>
+</div>
+
+<!-- 打赏弹窗 -->
+<div class="modal" id="donateModal">
+  <div class="modal-box">
+    <h2>感谢支持 🙏</h2>
+    <img src="打赏码.png" alt="打赏码" />
+    <p>仅用于自制小游戏感谢支持，其他用途无效</p>
+    <button onclick="closeDonate()">关闭</button>
+  </div>
+</div>
+
+<div class="celebration" id="celebration"></div>
+
+<script>
+let board = [];
+let solution = [];
+let fixed = [];
+let sec = 0;
+let timer = null;
+let currentDiff = "easy";
+
+const levelMap = {
+  easy:"入门级",
+  primary:"初级",
+  medium:"中级",
+  hard:"高级",
+  expert:"专家级",
+  master:"大师级"
+};
+
+// 世界冠军记录秒数 → SSS = ×1.2
+const gradeBase = {
+  easy:    { SSS:72,  SS:96,  S:120, A:150, B:180, C:240, D:300 },
+  primary: { SSS:96,  SS:132, S:168, A:210, B:252, C:312, D:372 },
+  medium:  { SSS:144, SS:192, S:240, A:288, B:336, C:384, D:432 },
+  hard:    { SSS:216, SS:276, S:336, A:396, B:456, C:516, D:576 },
+  expert:  { SSS:288, SS:348, S:420, A:480, B:540, C:600, D:660 },
+  master:  { SSS:432, SS:510, S:570, A:660, B:750, C:840, D:930 }
+};
+
+// 基础工具
+function rand(a,b){return Math.floor(Math.random()*(b-a+1))+a}
+function shuffle(a){for(let i=a.length-1;i>0;i--){let j=rand(0,i);[a[i],a[j]]=[a[j],a[i]]}return a}
+function isValid(g,r,c,n){
+  for(let i=0;i<9;i++)if(g[r][i]==n||g[i][c]==n)return false;
+  let br=Math.floor(r/3)*3, bc=Math.floor(c/3)*3;
+  for(let i=0;i<3;i++)for(let j=0;j<3;j++)if(g[br+i][bc+j]==n)return false;
+  return true;
+}
+
+// 生成终盘
+function fillGrid(g){
+  let nums=[1,2,3,4,5,6,7,8,9];
+  for(let r=0;r<9;r++){
+    for(let c=0;c<9;c++){
+      if(g[r][c]==0){
+        shuffle(nums);
+        for(let n of nums){
+          if(isValid(g,r,c,n)){
+            g[r][c]=n;
+            if(fillGrid(g))return true;
+            g[r][c]=0;
+          }
+        }
+        return false;
+      }
+    }
+  }
+  return true;
+}
+
+// 唯一解检测
+function countSol(g){
+  let cnt=0;
+  function back(){
+    for(let r=0;r<9;r++)for(let c=0;c<9;c++){
+      if(g[r][c]==0){
+        for(let n=1;n<=9;n++){
+          if(isValid(g,r,c,n)){g[r][c]=n;back();g[r][c]=0;}
+        }
+        return;
+      }
+    }
+    cnt++;
+  }
+  back();
+  return cnt;
+}
+
+// 挖空生成题目
+function makePuzzle(diff){
+  let g=Array.from({length:9},()=>Array(9).fill(0));
+  fillGrid(g);
+  let s=JSON.parse(JSON.stringify(g));
+  let rm=0;
+  const target={easy:41,primary:34,medium:28,hard:24,expert:20,master:17}[diff];
+  let cells=[];
+  for(let r=0;r<9;r++)for(let c=0;c<9;c++)cells.push([r,c]);
+  shuffle(cells);
+  for(let [r,c] of cells){
+    if(rm>=81-target)break;
+    let t=g[r][c];g[r][c]=0;
+    let cp=JSON.parse(JSON.stringify(g));
+    if(countSol(cp)!=1){g[r][c]=t;}else{rm++;}
+  }
+  return {puzzle:g,solution:s};
+}
+
+// 计时
+function startTimer(){
+  clearInterval(timer);sec=0;
+  timer=setInterval(()=>{
+    sec++;
+    let m=String(Math.floor(sec/60)).padStart(2,'0');
+    let s=String(sec%60).padStart(2,'0');
+    document.getElementById('timer').textContent=m+':'+s;
+  },1000);
+}
+
+// 评级
+function getRank(){
+  let g=gradeBase[currentDiff];
+  if(sec<=g.SSS)return "SSS";
+  if(sec<=g.SS)return "SS";
+  if(sec<=g.S)return "S";
+  if(sec<=g.A)return "A";
+  if(sec<=g.B)return "B";
+  if(sec<=g.C)return "C";
+  if(sec<=g.D)return "D";
+  return "F";
+}
+
+// 切换难度自动刷新
+function newSudoku(){
+  currentDiff = document.getElementById('difficulty').value;
+  document.getElementById('levelText').textContent=levelMap[currentDiff];
+  closeModal();
+  closeDonate();
+  let res=makePuzzle(currentDiff);
+  board=res.puzzle;
+  solution=res.solution;
+  fixed=board.map(r=>r.map(v=>v!=0));
+  render();
+  startTimer();
+}
+
+// 下一题（同难度）
+function nextSameLevel(){
+  closeModal();
+  closeDonate();
+  let res=makePuzzle(currentDiff);
+  board=res.puzzle;
+  solution=res.solution;
+  fixed=board.map(r=>r.map(v=>v!=0));
+  render();
+  startTimer();
+}
+
+// 绘制盘面
+function render(){
+  let dom=document.getElementById('board');
+  dom.innerHTML='';
+  for(let r=0;r<9;r++){
+    for(let c=0;c<9;c++){
+      let cell=document.createElement('div');
+      cell.className='cell';
+      if(fixed[r][c])cell.classList.add('fixed');
+      let input=document.createElement('input');
+      input.maxLength=1;
+      input.inputMode="numeric";
+      if(fixed[r][c]){
+        input.value=board[r][c];
+        input.disabled=true;
+      }else{
+        input.value='';
+      }
+      input.oninput=()=>{
+        let v=input.value.replace(/[^1-9]/g,'');
+        input.value=v;
+        board[r][c]=v?+v:0;
+        cell.classList.remove('error');
+      };
+      input.onfocus=()=>cell.classList.add('highlight');
+      input.onblur=()=>cell.classList.remove('highlight');
+      cell.appendChild(input);
+      dom.appendChild(cell);
+    }
+  }
+}
+
+// 检查已填部分
+function checkPartial(){
+  let cells=document.querySelectorAll('.cell');
+  let hasError = false;
+  let filled = 0;
+  cells.forEach((el,k)=>{
+    let r=Math.floor(k/9), c=k%9;
+    let inp=el.querySelector('input');
+    let v=inp.value.trim();
+    if(!v) return;
+    filled++;
+    let ok = (+v === solution[r][c]);
+    el.classList.toggle('error', !ok);
+    if(!ok) hasError = true;
+  });
+  if(filled===0) alert('请先填写数字');
+  else if(hasError) alert('当前填写存在错误');
+  else alert('目前填写全部正确！');
+}
+
+// 提交答案 + 弹窗 + 庆祝动画
+function submitAnswer(){
+  let empty=0,err=0;
+  let cells=document.querySelectorAll('.cell');
+  cells.forEach((el,k)=>{
+    let r=Math.floor(k/9),c=k%9;
+    let inp=el.querySelector('input');
+    let v=inp.value.trim();
+    if(!v){empty++;return;}
+    let ok=+v===solution[r][c];
+    el.classList.toggle('error',!ok);
+    if(!ok)err++;
+  });
+  if(empty>0){alert('请完成所有空格后再提交');return;}
+  if(err>0){alert('答案有误，请修正后再提交');return;}
+
+  clearInterval(timer);
+  let rank=getRank();
+  document.getElementById('modalRank').innerText=rank;
+  document.getElementById('modalText').innerText=`用时：${Math.floor(sec/60)}分${sec%60}秒`;
+  document.getElementById('modal').classList.add('show');
+  createConfetti();
+}
+
+// 重置本题
+function resetUser(){
+  let els=document.querySelectorAll('#board input');
+  els.forEach((i,k)=>{
+    let r=Math.floor(k/9),c=k%9;
+    if(!fixed[r][c]){i.value='';board[r][c]=0;}
+  });
+  document.querySelectorAll('.cell').forEach(e=>e.classList.remove('error'));
+  closeModal();
+  closeDonate();
+}
+
+// 显示答案
+function showAnswer(){
+  let els=document.querySelectorAll('#board input');
+  els.forEach((i,k)=>{
+    let r=Math.floor(k/9),c=k%9;
+    if(!fixed[r][c]) i.value=solution[r][c];
+  });
+}
+
+// 自动解
+function solveSudoku(){
+  for(let r=0;r<9;r++)for(let c=0;c<9;c++)board[r][c]=solution[r][c];
+  showAnswer();
+}
+
+// 结果弹窗关闭
+function closeModal(){
+  document.getElementById('modal').classList.remove('show');
+  document.getElementById('celebration').innerHTML='';
+}
+
+// 打赏弹窗控制
+function openDonate(){
+  document.getElementById('donateModal').classList.add('show');
+}
+function closeDonate(){
+  document.getElementById('donateModal').classList.remove('show');
+}
+
+// 礼花动画
+function createConfetti(){
+  const colors=['#ff4757','#ffa502','#fffa65','#2ed573','#1e90ff','#3742fa','#a55eea','#ff6b6b','#48dbfb'];
+  const wrap=document.getElementById('celebration');
+  for(let i=0;i<120;i++){
+    let d=document.createElement('div');
+    d.className='confetti';
+    d.style.left=rand(0,100)+'vw';
+    d.style.backgroundColor=colors[rand(0,colors.length-1)];
+    d.style.animationDuration=rand(2,4)+'s';
+    d.style.transform=`rotate(${rand(0,360)}deg)`;
+    wrap.appendChild(d);
+  }
+}
+
+newSudoku();
+</script>
+</body>
+</html>
